@@ -1,0 +1,20 @@
+# OAuth private keys and generated config — never commit these
+private_key.pem
+public_key.pem
+*.pem
+.env
+
+# Node / TypeScript build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

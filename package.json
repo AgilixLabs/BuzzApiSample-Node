@@ -1,0 +1,26 @@
+{
+  "name": "buzz-api-sample",
+  "version": "1.0.0",
+  "description": "TypeScript sample and reusable client library for the Buzz API (OAuth 2.0 JWT client credentials).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "sample": "node dist/sample.js",
+    "start": "node scripts/run-buzz-sample.js",
+    "setup": "node scripts/setup-buzz-oauth.js",
+    "cleanup": "node scripts/cleanup-buzz-sample.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
