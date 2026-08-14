@@ -109,8 +109,6 @@ async function confirm(label, defaultYes = false) {
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
-// /cmd/* endpoints authenticate a session token via the _token query parameter.
-// /api/* (REST) endpoints authenticate via the Authorization: Bearer header.
 async function buzzHttp(method, url, body, headers) {
   let resp;
   try {
@@ -125,20 +123,24 @@ async function buzzHttp(method, url, body, headers) {
   return { status: resp.status, data, raw };
 }
 
+// Session tokens travel in an Authorization: Bearer header on both /cmd/* and /api/*
+// endpoints.  A _token query parameter is also accepted by /cmd/*, but a credential in
+// a URL is recorded by server and proxy access logs.
+// Buzz returns XML unless JSON is requested via Accept.
+function authHeaders(token, extra = {}) {
+  return { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
+}
+
 async function buzzPost(server, cmd, body, token = null) {
-  let url = `${server}/cmd/${cmd}`;
-  if (token) url += `?${new URLSearchParams({ _token: token }).toString()}`;
-  const r = await buzzHttp('POST', url, JSON.stringify(body),
-    { 'Content-Type': 'application/json', Accept: 'application/json' });
+  const r = await buzzHttp('POST', `${server}/cmd/${cmd}`, JSON.stringify(body),
+    authHeaders(token, { 'Content-Type': 'application/json' }));
   return r.data;
 }
 
 async function buzzGet(server, cmd, params = {}, token = null) {
-  const q = new URLSearchParams(params);
-  if (token) q.set('_token', token);
-  const qs = q.toString();
+  const qs = new URLSearchParams(params).toString();
   const r = await buzzHttp('GET', `${server}/cmd/${cmd}${qs ? `?${qs}` : ''}`, undefined,
-    { Accept: 'application/json' });
+    authHeaders(token));
   return r.data;
 }
 
@@ -165,6 +167,38 @@ function responseMessage(resp) {
   return inner.message != null ? String(inner.message) : '';
 }
 
+// The per-entity result of a multi-object command (CreateUsers2, DeleteUsers).  Those
+// commands report each entity's outcome under response.responses.response, while the
+// OUTER code is OK whenever the request was merely well formed.  A per-entity
+// AccessDenied therefore arrives inside an "OK" envelope, so the outer code alone
+// cannot tell you whether the entity was actually created or deleted.
+function itemResult(resp) {
+  const inner = (resp && resp.response && typeof resp.response === 'object') ? resp.response : resp;
+  if (!inner || typeof inner !== 'object') return {};
+  let node = inner.responses && typeof inner.responses === 'object' ? inner.responses.response : null;
+  if (Array.isArray(node)) node = node.length ? node[0] : null;
+  if (!node || typeof node !== 'object') return {};
+  return {
+    code: node.code != null ? String(node.code) : '',
+    message: node.message != null ? String(node.message) : '',
+    userid: node.user && node.user.userid != null ? String(node.user.userid) : '',
+  };
+}
+
+// The short-lived token login3 returns alongside SecondFactorRequired.  Observed shape:
+// response.token, duplicated at response.body.token.  There is no "user" node on that
+// response, so response.user.token (where the session token lives on a *successful*
+// login) does not exist yet.  remembermfa.token is deliberately ignored: it remembers a
+// device and cannot complete this login.
+function secondFactorToken(resp) {
+  const inner = (resp && resp.response && typeof resp.response === 'object') ? resp.response : resp;
+  if (!inner || typeof inner !== 'object') return '';
+  for (const c of [inner.user?.token, inner.token, inner.body?.token]) {
+    if (typeof c === 'string' && c) return c;
+  }
+  return '';
+}
+
 // ── Admin login (login3, with optional MFA) ─────────────────────────────────────
 async function adminLogin(server) {
   for (;;) {
@@ -175,11 +209,33 @@ async function adminLogin(server) {
     let resp = await buzzPost(server, 'login3', { request: { cmd: 'login3', username, password } });
     let code = responseCode(resp);
 
-    if (code && /(factor|mfa|otp|challenge|verify|multifactor)/i.test(code)) {
-      process.stdout.write(' MFA required.\n');
-      const mfa = await promptRequired('MFA / one-time code', '', 'BUZZ_ADMIN_MFA');
-      const partial = resp?.response?.token || resp?.token || '';
-      resp = await buzzPost(server, 'verifylogin', { request: { cmd: 'verifylogin', token: partial, code: mfa } });
+    // Multi-factor authentication.  login3 answers SecondFactorRequired when the
+    // password was correct but the account has MFA configured, and returns a
+    // short-lived token that is presented in an Authorization: Bearer header to
+    // secondfactorauthenticate, which returns the real session token.  Putting the
+    // token in the request body instead is ignored and answers AccessDenied userId='-1'.
+    //   https://api.agilixbuzz.com/docs/entry/Command/Login3.md
+    //   https://api.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md
+    if (code === 'SecondFactorConfigurationNowRequired') {
+      process.stdout.write('\n  This account must configure multi-factor authentication before it can\n');
+      process.stdout.write('  be used.  Complete MFA setup in Buzz, then re-run this script.\n');
+      if (process.env.BUZZ_ADMIN_PASSWORD) fail('Admin account requires multi-factor authentication setup.');
+      process.stdout.write('  Press Ctrl+C to abort.\n\n');
+      continue;
+    }
+
+    if (code === 'SecondFactorRequired') {
+      process.stdout.write(' multi-factor authentication required.\n');
+      const mfaToken = secondFactorToken(resp);
+      if (!mfaToken) {
+        process.stdout.write('\n  Buzz asked for a second factor but no token could be found in its reply.\n');
+        if (process.env.BUZZ_ADMIN_PASSWORD) fail('No second-factor token was returned.');
+        process.stdout.write('  Press Ctrl+C to abort.\n\n');
+        continue;
+      }
+      const otp = await promptRequired('One-time code from your authenticator app or email', '', 'BUZZ_ADMIN_MFA');
+      resp = await buzzPost(server, 'secondfactorauthenticate',
+        { request: { cmd: 'secondfactorauthenticate', otp } }, mfaToken);
       code = responseCode(resp);
     }
 
@@ -261,5 +317,6 @@ module.exports = {
   section, info, fail,
   readLine, promptRequired, promptOptional, promptPassword, confirm, closeRl,
   buzzPost, buzzGet, registerPublicKey, deletePublicKey, responseCode, responseMessage,
+  itemResult, secondFactorToken,
   adminLogin, generateKeyPair, writeEnv, loadEnv,
 };
