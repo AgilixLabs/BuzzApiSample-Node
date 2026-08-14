@@ -66,8 +66,14 @@ async function cleanupMain() {
 
   console.log(`\n-- Deleting Application Identity account (userid: ${oauthUserId}) --`);
   const resp = await common.buzzPost(server, 'deleteusers', { requests: { user: [{ userid: oauthUserId }] } }, adminToken);
-  if (common.responseCode(resp) === 'OK') console.log('Application Identity account deleted.');
-  else process.stderr.write(`Warning: delete returned code "${common.responseCode(resp)}". Continuing.\n`);
+  // The per-user outcome is authoritative.  The OUTER code is OK whenever the request
+  // was merely well formed, so checking it first would report success for a delete that
+  // was actually denied or whose target did not exist.
+  const item = common.itemResult(resp);
+  const delCode = item.code || common.responseCode(resp);
+  const detail = item.message ? ` - ${item.message}` : '';
+  if (delCode === 'OK') console.log('Application Identity account deleted.');
+  else process.stderr.write(`Warning: delete returned code "${delCode}"${detail}. Continuing.\n`);
 
   console.log('\n-- Removing local files --------------------------------');
   const keyDir = privateKeyPath ? path.dirname(privateKeyPath) : common.PROJECT_ROOT;

@@ -50,7 +50,9 @@ async function runSample(client: BuzzApiClient, log: Logger): Promise<void> {
   const user = userNode.user ?? {};
 
   // This server returns the identifier as "id"; older servers use "userid".
-  const userId = user.userid ?? user.id;
+  // The User schema names this "id".  ("userid" is the CreateUsers2 *response*
+  // field for a newly created user - a different command, not an alias here.)
+  const userId = user.id;
   log('info', `Authenticated as user ${user.username} ("${user.firstname} ${user.lastname}", userid: ${userId})`);
   const domainId = user.domainid;
   log('info', `Home domain: ${domainId}`);

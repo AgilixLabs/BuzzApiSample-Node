@@ -48,7 +48,7 @@ async function main() {
     console.log(`  Private key : ${privPath}`);
     console.log(`  Public key  : ${pubPath}\n`);
     console.log('Next step: register the public key with Buzz.');
-    console.log('  node scripts/register-buzz-oauth-key.js -s https://api.agilixbuzz.com -u <userid> -k <kid> -p public_key.pem\n');
+    console.log('  node scripts/register-buzz-oauth-key.js -s https://backgroundapi.agilixbuzz.com -u <userid> -k <kid> -p public_key.pem\n');
     console.log('IMPORTANT: Never commit private_key.pem to source control.');
   } catch (e) {
     process.stderr.write(`Error: ${e.message}\n`);

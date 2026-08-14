@@ -41,7 +41,7 @@ async function setupMain() {
 
   common.section('Step 1: Buzz Server URL');
   const server = (serverArg
-    || await common.promptRequired('Buzz API server URL (e.g. https://api.agilixbuzz.com)', '', 'BUZZ_SERVER_URL'))
+    || await common.promptRequired('Buzz API server URL (e.g. https://backgroundapi.agilixbuzz.com)', '', 'BUZZ_SERVER_URL'))
     .replace(/\/+$/, '');
   console.log(`  Server: ${server}`);
 
@@ -126,7 +126,10 @@ async function getOrCreateAccount(server, adminToken) {
       const n = parseInt(choice, 10);
       targetDomain = (/^\d+$/.test(choice) && n >= 1 && n <= domains.length) ? domains[n - 1][0] : choice;
     } else {
-      process.stdout.write(' (could not fetch domains)\n\n');
+      // An empty list is normal when the admin holds no ReadDomain right anywhere,
+      // or when the domain simply has no child domains.  Not an error -- just ask.
+      process.stdout.write(' done\n\n');
+      process.stdout.write('  No domains were listed for this account, so enter the target domain directly.\n');
       targetDomain = await common.promptRequired('Domain id for the new account (e.g. //myschool or a numeric id)');
     }
   }
@@ -144,6 +147,19 @@ async function getOrCreateAccount(server, adminToken) {
   if (common.responseCode(resp) !== 'OK') {
     common.fail(`CreateUsers2 failed (code: ${common.responseCode(resp)}).  Response: ${JSON.stringify(resp)}`);
   }
+  // The outer OK only means the request parsed; CreateUsers2 reports the outcome for
+  // the user it created under responses.response, so a denial arrives inside an "OK"
+  // envelope and must be checked separately.
+  const item = common.itemResult(resp);
+  if (item.code && item.code !== 'OK') {
+    const detail = item.message ? ` - ${item.message}` : '';
+    if (item.code === 'AccessDenied') {
+      common.fail(`CreateUsers2 was denied (code: ${item.code}${detail}).\n`
+        + `  The admin account needs the CreateUser right on domain ${targetDomain}.\n`
+        + '  Grant it that right (and UpdateUser, so it can register the OAuth key), then re-run.');
+    }
+    common.fail(`CreateUsers2 failed for the requested user (code: ${item.code}${detail}).`);
+  }
   const userId = extractCreatedUserId(resp);
   if (!userId) common.fail(`CreateUsers2 succeeded but returned no userid.  Response: ${JSON.stringify(resp)}`);
   process.stdout.write(` OK (userid: ${userId})\n`);
@@ -151,13 +167,21 @@ async function getOrCreateAccount(server, adminToken) {
 }
 
 async function listDomains(server, token) {
-  const resp = await common.buzzGet(server, 'getdomains', {}, token);
+  // ListDomains, not "getdomains" -- the latter is not a Buzz command and always
+  // answered "Unknown API command", so this silently returned [] on every run.
+  // domainid=0 means "every domain this account has ReadDomain rights on"; limit=0
+  // lifts the default 100-domain cap (capped server-side at 1000 for domainid=0).
+  //   https://api.agilixbuzz.com/docs/entry/Command/ListDomains.md
+  const resp = await common.buzzGet(server, 'listdomains', { domainid: 0, limit: 0 }, token);
   if (common.responseCode(resp) !== 'OK') return [];
+  // When the account can read no domains the server answers OK with "domains":{},
+  // so every level has to tolerate a missing or empty node.
   let domains = resp?.response?.domains?.domain ?? [];
   if (!Array.isArray(domains)) domains = [domains];
   return domains
     .filter((d) => d && typeof d === 'object')
-    .map((d) => [String(d.id ?? d.domainid ?? ''), String(d.name ?? '')]);
+    // The Domain schema names the identifier "id"; "domainid" is what you *send*.
+    .map((d) => [String(d.id ?? ''), String(d.name ?? '')]);
 }
 
 function extractCreatedUserId(resp) {
@@ -165,7 +189,8 @@ function extractCreatedUserId(resp) {
   let inner = r?.responses?.response ?? {};
   if (Array.isArray(inner)) inner = inner[0] || {};
   const user = (inner && typeof inner === 'object') ? (inner.user || {}) : {};
-  return String(user.userid ?? user.id ?? '');
+  // The CreateUsers2 response documents this as "userid".
+  return String(user.userid ?? '');
 }
 
 function defaultKid() {
