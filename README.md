@@ -125,7 +125,7 @@ Choose a **Key ID** (`kid`), e.g. `2025-q2`. Allowed characters: ASCII letters, 
 
 ```bash
 node scripts/register-buzz-oauth-key.js \
-    -s https://api.agilixbuzz.com \
+    -s https://backgroundapi.agilixbuzz.com \
     -u 12345678 \
     -k 2025-q2 \
     -p public_key.pem
@@ -150,7 +150,7 @@ npm run build && npm run sample
 import { BuzzApiClient } from 'buzz-api-sample'; // or './dist'
 
 const client = BuzzApiClient.fromPemFile(
-  'https://api.agilixbuzz.com',
+  'https://backgroundapi.agilixbuzz.com',
   'MyApp/1.0 (Node; MyApp; admin@example.com)',
   '12345678',        // oauthUserId
   '2025-q2',         // oauthKid
@@ -166,7 +166,7 @@ const domain = client.verifyResponse(
 
 `jsonRequest(method, cmd?, params?, jsonBody?, includeToken?)` resolves to the parsed JSON
 response. `verifyResponse(node)` throws `BuzzApiError` unless `response.code === "OK"` (and
-recursively checks child responses from batch APIs).
+recursively checks child responses from multi-object commands such as CreateUsers2).
 
 ---
 
