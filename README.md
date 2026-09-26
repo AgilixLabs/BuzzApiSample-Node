@@ -1,8 +1,8 @@
 # BuzzApiSample-Node
 
 A TypeScript sample and reusable client library for the Buzz API. The `BuzzApiClient` class
-handles OAuth 2.0 authentication, automatic token refresh, exponential backoff, and rate-limit
-compliance so your integration code can focus on business logic.
+handles OAuth 2.0 authentication, automatic token refresh, exponential backoff, and throttling
+(rate limits and backend pressure) so your integration code can focus on business logic.
 
 Targets **Node.js 22+** and uses only built-ins (`fetch`, `node:crypto`) — **no runtime
 dependencies**. TypeScript is a build-time dev dependency only.
@@ -34,8 +34,32 @@ The sample is intentionally read-only — it can be run repeatedly without modif
 **BuzzApiClient** simplifies integration by:
 - Managing OAuth tokens automatically — requesting and refreshing Bearer tokens as needed.
 - Retrying transient failures with exponential backoff (1 s → 64 s, up to 5 retries).
-- Honouring `Retry-After` and `X-RateLimit-Reset` headers from the server.
+- Handling throttling (rate limits, time limits, backend pressure) — see [Throttling and backend pressure](#throttling-and-backend-pressure).
 - Providing `jsonRequest` and `verifyResponse` helpers for common JSON API patterns.
+
+### Throttling and backend pressure
+
+Most Buzz API commands report errors, throttles included, as **HTTP 200** with a code in the
+XML/JSON response envelope (`response.code`). REST-style endpoints use real HTTP status codes.
+`BuzzApiClient` handles both, so it keeps working as commands move to REST conventions:
+
+- **Detection** — a request counts as throttled if the HTTP status is 429 or 503, *or* the envelope
+  code is one of `TimeLimit`, `RateLimit`, `BackendPressure`, `ServerOverwhelmed`, `RetryLater`,
+  `LimitExceeded`, `TooManyRequests`, or `Service Unavailable` / `ServiceUnavailable` (sent when the
+  server sheds load before authentication). XML responses are parsed as well as JSON, using a small
+  built-in converter (no XML dependency).
+- **How long to wait** — `Retry-After` (sent even with HTTP 200), then `X-RateLimit-Reset`
+  (seconds until the window resets), then exponential backoff with jitter. The client waits as long
+  as the server asks, up to 10 minutes. If the server asks for longer, the request fails straight away
+  rather than retrying early, because an early retry counts against the limit again.
+- **Client-wide back-off** — once the server throttles one request, every request on that
+  `BuzzApiClient` instance waits out the same window.
+- **Batch and multi-object commands** — the outer code can be `OK` while individual items are
+  throttled. `verifyResponse` then throws `BuzzApiThrottledError` with `throttledItemIndexes`,
+  so you can resubmit just those items. The full response is in `response`.
+- **Retries used up** — `jsonRequest` throws `BuzzApiThrottledError`, which extends
+  `BuzzApiError`. Its `status` is 429 or 503 even when the server sent HTTP 200.
+  `code` and `retryAfterMs` are also set.
 
 ---
 
@@ -166,7 +190,8 @@ const domain = client.verifyResponse(
 
 `jsonRequest(method, cmd?, params?, jsonBody?, includeToken?)` resolves to the parsed JSON
 response. `verifyResponse(node)` throws `BuzzApiError` unless `response.code === "OK"` (and
-recursively checks child responses from multi-object commands such as CreateUsers2).
+recursively checks child responses from multi-object commands such as CreateUsers2). Throttles
+raise `BuzzApiThrottledError`, a subclass of `BuzzApiError`.
 
 ---
 
