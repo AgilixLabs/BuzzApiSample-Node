@@ -325,16 +325,16 @@ export class BuzzApiClient {
     let retriesRemaining = RETRIES_TO_MAKE;
     let baseWait = INITIAL_WAIT_MS;
     for (;;) {
-      // A fresh assertion is built on every attempt: JWTs expire in two minutes
-      // and a long backoff can push a reused assertion past its exp claim.
+      // Wait out any throttle window first, then build a fresh assertion on every
+      // attempt: JWTs expire in two minutes and a throttle wait can be up to ten, so
+      // an assertion built before the wait (or reused) could be past its exp claim.
+      await this.waitForThrottleWindow();
       const assertion = this.buildClientAssertion();
       const form = new URLSearchParams({
         grant_type: 'client_credentials',
         client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
         client_assertion: assertion,
       });
-
-      await this.waitForThrottleWindow();
 
       let resp: Response;
       try {
