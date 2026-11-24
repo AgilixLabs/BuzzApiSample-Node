@@ -199,8 +199,47 @@ function secondFactorToken(resp) {
   return '';
 }
 
+// ── Deprecated endpoints and APIs ───────────────────────────────────────────────
+// The original, single API endpoint.  It is deprecated for integrations: Buzz
+// refuses it (code "ApiDeprecated") for users and domains created after the
+// deprecation was enforced.  Use the background endpoint for background
+// processing, or the interactive endpoint for requests a user is waiting on.
+//   https://interactiveapi.agilixbuzz.com/docs/entry/Concept/ApiDeprecation.md
+const LEGACY_API_HOSTS = new Set(['api.agilixbuzz.com']);
+
+// Return serverUrl trimmed, refusing a deprecated endpoint host name.  This repeats
+// checkServerUrl in src/buzzApiClient.ts, which these plain-JS scripts cannot import
+// before the TypeScript build has run.  Keep the two in step.
+function checkServerUrl(serverUrl) {
+  const url = String(serverUrl ?? '').trim().replace(/\/+$/, '');
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* not an absolute URL: no host name to refuse */ }
+  if (LEGACY_API_HOSTS.has(host)) {
+    throw new Error(
+      `${host} is deprecated for API integrations, and Buzz refuses it for new users and domains. `
+      + 'Use the background endpoint (https://backgroundapi.agilixbuzz.com) for background processing, '
+      + 'or the interactive endpoint (https://interactiveapi.agilixbuzz.com) for requests a user is waiting on. '
+      + "See 'API Deprecation' and 'API Time Limiting' in the Buzz API documentation.");
+  }
+  return url;
+}
+
+// Buzz refuses a deprecated command, endpoint host name or sign-in for new users and
+// domains with the code ApiDeprecated, on the response or on an item within it.
+// Trying again cannot help, so stop and show the server's message, which says what
+// to use instead.
+function failIfDeprecated(resp) {
+  let message = null;
+  if (responseCode(resp) === 'ApiDeprecated') message = responseMessage(resp);
+  else if (itemResult(resp).code === 'ApiDeprecated') message = itemResult(resp).message;
+  if (message !== null) fail(message || 'Buzz refused this request because it uses a deprecated API.');
+}
+
 // ── Admin login (login3, with optional MFA) ─────────────────────────────────────
 async function adminLogin(server) {
+  // Refuse a deprecated endpoint host name before asking for a password.
+  try { checkServerUrl(server); } catch (e) { fail(e.message); }
+
   for (;;) {
     const username = await readAdminUsername();
     const password = await promptPassword('Admin password', 'BUZZ_ADMIN_PASSWORD');
@@ -214,8 +253,8 @@ async function adminLogin(server) {
     // short-lived token that is presented in an Authorization: Bearer header to
     // secondfactorauthenticate, which returns the real session token.  Putting the
     // token in the request body instead is ignored and answers AccessDenied userId='-1'.
-    //   https://api.agilixbuzz.com/docs/entry/Command/Login3.md
-    //   https://api.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md
+    //   https://interactiveapi.agilixbuzz.com/docs/entry/Command/Login3.md
+    //   https://interactiveapi.agilixbuzz.com/docs/entry/Command/SecondFactorAuthenticate.md
     if (code === 'SecondFactorConfigurationNowRequired') {
       process.stdout.write('\n  This account must configure multi-factor authentication before it can\n');
       process.stdout.write('  be used.  Complete MFA setup in Buzz, then re-run this script.\n');
@@ -238,6 +277,10 @@ async function adminLogin(server) {
         { request: { cmd: 'secondfactorauthenticate', otp } }, mfaToken);
       code = responseCode(resp);
     }
+
+    // Buzz refuses a deprecated endpoint host name or sign-in for new users and
+    // domains.  Trying again cannot help, so stop and show what to use instead.
+    failIfDeprecated(resp);
 
     if (code !== 'OK') {
       const msg = responseMessage(resp);
@@ -317,6 +360,6 @@ module.exports = {
   section, info, fail,
   readLine, promptRequired, promptOptional, promptPassword, confirm, closeRl,
   buzzPost, buzzGet, registerPublicKey, deletePublicKey, responseCode, responseMessage,
-  itemResult, secondFactorToken,
+  itemResult, secondFactorToken, LEGACY_API_HOSTS, checkServerUrl, failIfDeprecated,
   adminLogin, generateKeyPair, writeEnv, loadEnv,
 };

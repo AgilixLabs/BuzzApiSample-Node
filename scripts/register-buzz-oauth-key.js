@@ -43,7 +43,14 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  server = server.replace(/\/+$/, '');
+  // Refuse a deprecated endpoint host name before asking for a token.
+  try {
+    server = common.checkServerUrl(server);
+  } catch (e) {
+    process.stderr.write(`Error: ${e.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(kid)) {
     process.stderr.write('Error: invalid kid. Allowed: ASCII letters, digits, -, _, .  Max 128 chars.\n');
     process.exitCode = 1;

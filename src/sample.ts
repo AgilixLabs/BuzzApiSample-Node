@@ -15,9 +15,14 @@
 import { BuzzApiClient, type Logger } from './buzzApiClient';
 import { readConfig } from './config';
 
+// Replace YOUR_APPLICATION_NAME with your application's name and version, such as 'AcmeRosterSync/1.0'.
+// It is how Agilix support identifies your integration. Do not include the word "Buzz": a User-Agent
+// containing it is treated as one of Agilix's own applications.
+const applicationName: string = YOUR_APPLICATION_NAME;
+
 async function main(): Promise<void> {
   const config = readConfig();
-  const userAgent = `BuzzApiClient/1.0.0 (Node; ${config.applicationInformation}; ${config.contactInformation})`;
+  const userAgent = `${applicationName} (Node; ${config.applicationInformation}; ${config.contactInformation})`;
 
   // Show info/warn/error; suppress debug (request/response tracing) for a clean demo.
   const logger: Logger = (level, message) => {

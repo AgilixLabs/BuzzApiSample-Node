@@ -39,6 +39,8 @@ async function cleanupMain() {
     process.stderr.write('.env is missing required fields (server url, oauth user id).\n');
     process.exit(1);
   }
+  // Refuse a deprecated endpoint host name before anything else is asked for.
+  try { common.checkServerUrl(server); } catch (e) { common.fail(e.message); }
 
   console.log('\n========================================================');
   console.log('  Buzz API Sample - Cleanup');
@@ -69,6 +71,9 @@ async function cleanupMain() {
   // The per-user outcome is authoritative.  The OUTER code is OK whenever the request
   // was merely well formed, so checking it first would report success for a delete that
   // was actually denied or whose target did not exist.
+  // A deprecated endpoint or command is refused until the configuration is changed.
+  // Stop here, with .env still in place, rather than removing the local files.
+  common.failIfDeprecated(resp);
   const item = common.itemResult(resp);
   const delCode = item.code || common.responseCode(resp);
   const detail = item.message ? ` - ${item.message}` : '';

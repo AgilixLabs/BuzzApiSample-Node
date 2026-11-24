@@ -69,6 +69,45 @@ const NO_RETRY_STATUS = new Set([
   501, 505, 506, 508, 510, 511,
 ]);
 
+/**
+ * The original, single API endpoint. It is deprecated for integrations: Buzz
+ * refuses it (code "ApiDeprecated") for users and domains created after the
+ * deprecation was enforced. Use the background endpoint for background
+ * processing, or the interactive endpoint for requests a user is waiting on.
+ *   https://interactiveapi.agilixbuzz.com/docs/entry/Concept/ApiDeprecation.md
+ */
+export const LEGACY_API_HOSTS: ReadonlySet<string> = new Set(['api.agilixbuzz.com']);
+
+/**
+ * The response code Buzz gives a request that used a deprecated command,
+ * endpoint host name or kind of sign-in. It is never worth retrying.
+ */
+const DEPRECATED_CODE = 'ApiDeprecated';
+
+/**
+ * Return `serverUrl` trimmed, refusing a deprecated endpoint host name.
+ *
+ * @throws Error if the URL names a host in {@link LEGACY_API_HOSTS}.
+ */
+export function checkServerUrl(serverUrl: string): string {
+  const url = (serverUrl ?? '').trim().replace(/\/+$/, '');
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    // Not an absolute URL, so there is no host name to refuse.
+  }
+  if (LEGACY_API_HOSTS.has(host)) {
+    throw new Error(
+      `${host} is deprecated for API integrations, and Buzz refuses it for new users and domains. `
+      + 'Use the background endpoint (https://backgroundapi.agilixbuzz.com) for background processing, '
+      + 'or the interactive endpoint (https://interactiveapi.agilixbuzz.com) for requests a user is waiting on. '
+      + "See 'API Deprecation' and 'API Time Limiting' in the Buzz API documentation.",
+    );
+  }
+  return url;
+}
+
 /** Raised when a Buzz API call fails or returns a non-OK response code. */
 export class BuzzApiError extends Error {
   /** The HTTP status behind the failure, when there is one. */
@@ -78,6 +117,26 @@ export class BuzzApiError extends Error {
     super(message, options);
     this.name = 'BuzzApiError';
     this.status = status;
+  }
+}
+
+/**
+ * Raised when Buzz refuses a request because it used something deprecated
+ * (response code "ApiDeprecated", or "unauthorized_client" from the OAuth token
+ * endpoint).
+ *
+ * Deprecated commands, the `api.agilixbuzz.com` endpoint and password (Login3)
+ * sessions for integration work keep working for existing users and domains,
+ * but are refused for new ones. The message is the server's own and says what
+ * to use instead. **Never retry**: the request is refused until the code is
+ * changed.
+ *
+ * Extends `BuzzApiError` so existing handlers still catch it.
+ */
+export class BuzzApiDeprecatedError extends BuzzApiError {
+  constructor(message: string, status?: number) {
+    super(message, status);
+    this.name = 'BuzzApiDeprecatedError';
   }
 }
 
@@ -184,7 +243,7 @@ export class BuzzApiClient {
     if (!oauthKid) throw new Error('oauthKid is required');
     if (!privateKey) throw new Error('privateKey is required');
 
-    this.serverUrl = serverUrl.trim().replace(/\/+$/, '');
+    this.serverUrl = checkServerUrl(serverUrl);
     this.userAgent = userAgent;
     this.oauthUserId = oauthUserId;
     this.oauthKid = oauthKid;
@@ -255,6 +314,8 @@ export class BuzzApiClient {
    *
    * @throws BuzzApiThrottledError if the request, or any item of a batch or
    *   multi-object request, was throttled.
+   * @throws BuzzApiDeprecatedError if the request, or any item of a batch or
+   *   multi-object request, was refused because it used something deprecated.
    * @throws BuzzApiError if the response code is not "OK".
    */
   verifyResponse(responseJson: Json, checkChildResponses = true): Json {
@@ -275,6 +336,10 @@ export class BuzzApiClient {
       if (isThrottleCode(code)) {
         throw new BuzzApiThrottledError(`Buzz API call was throttled (${code}): ${redacted}`,
           code, responseJson, [], null, throttleStatus(200, code));
+      }
+      if (code === DEPRECATED_CODE) {
+        const message = toVerify.message;
+        throw new BuzzApiDeprecatedError(`Buzz refused a deprecated API: ${message || redacted}`);
       }
       throw new BuzzApiError(`Buzz API call failed. Expected response.code to be OK, found: ${redacted}`);
     }
@@ -358,7 +423,8 @@ export class BuzzApiClient {
         // The token endpoint answers with RFC 6749 errors rather than the Buzz
         // envelope: rate limits and backend pressure are 429/503 with error
         // "temporarily_unavailable" and Retry-After.
-        const errorField = tryParseEnvelope(body, resp.headers.get('content-type'))?.error;
+        const errorJson = tryParseEnvelope(body, resp.headers.get('content-type'));
+        const errorField = errorJson?.error;
         const oauthError = typeof errorField === 'string' ? errorField : null;
         if (resp.status === 429 || resp.status === 503 || oauthError === 'temporarily_unavailable') {
           const serverWait = serverDirectedWaitMs(resp.headers);
@@ -372,6 +438,14 @@ export class BuzzApiClient {
           this.extendThrottleWindow(Math.min(wait, MAX_SERVER_DIRECTED_WAIT_MS));
           throw new BuzzApiThrottledError(`OAuth token request was throttled (HTTP ${resp.status}): ${body}`,
             oauthError, null, [], serverWait, throttleStatus(resp.status, null));
+        }
+        // The token endpoint reports a deprecated endpoint host name in the
+        // OAuth error format. Retrying cannot help.
+        if (oauthError === 'unauthorized_client') {
+          this.log('error', `OAuth token request failed: ${resp.status} ${body}`);
+          const description = errorJson?.error_description;
+          throw new BuzzApiDeprecatedError(
+            `Buzz refused the OAuth token request: ${description || body}`, resp.status);
         }
         if (retriesRemaining > 0 && statusAllowsRetry(resp.status)) {
           await sleep(waitFromRetryHeader(resp.headers.get('retry-after'), baseWait));
@@ -512,6 +586,13 @@ export class BuzzApiClient {
 
       if (ok) {
         this.extendThrottleWindowForThrottledItems(envelope, resp.headers);
+        return envelope;
+      }
+
+      // A deprecated command, endpoint host name or kind of sign-in is refused
+      // until the code is changed, so it is never retried whatever the HTTP
+      // status: return the envelope so verifyResponse reports the server's message.
+      if (code === DEPRECATED_CODE) {
         return envelope;
       }
 

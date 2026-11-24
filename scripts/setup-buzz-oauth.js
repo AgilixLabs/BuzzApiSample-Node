@@ -43,6 +43,8 @@ async function setupMain() {
   const server = (serverArg
     || await common.promptRequired('Buzz API server URL (e.g. https://backgroundapi.agilixbuzz.com)', '', 'BUZZ_SERVER_URL'))
     .replace(/\/+$/, '');
+  // Refuse a deprecated endpoint host name before anything else is asked for.
+  try { common.checkServerUrl(server); } catch (e) { common.fail(e.message); }
   console.log(`  Server: ${server}`);
 
   common.section('Step 2: Admin Login');
@@ -144,6 +146,7 @@ async function getOrCreateAccount(server, adminToken) {
 
   process.stdout.write(`\nCreating Application Identity account '${username}'...`);
   const resp = await common.buzzPost(server, 'createusers2', { requests: { user: [user] } }, adminToken);
+  common.failIfDeprecated(resp);
   if (common.responseCode(resp) !== 'OK') {
     common.fail(`CreateUsers2 failed (code: ${common.responseCode(resp)}).  Response: ${JSON.stringify(resp)}`);
   }
@@ -171,8 +174,9 @@ async function listDomains(server, token) {
   // answered "Unknown API command", so this silently returned [] on every run.
   // domainid=0 means "every domain this account has ReadDomain rights on"; limit=0
   // lifts the default 100-domain cap (capped server-side at 1000 for domainid=0).
-  //   https://api.agilixbuzz.com/docs/entry/Command/ListDomains.md
+  //   https://interactiveapi.agilixbuzz.com/docs/entry/Command/ListDomains.md
   const resp = await common.buzzGet(server, 'listdomains', { domainid: 0, limit: 0 }, token);
+  common.failIfDeprecated(resp);
   if (common.responseCode(resp) !== 'OK') return [];
   // When the account can read no domains the server answers OK with "domains":{},
   // so every level has to tolerate a missing or empty node.
